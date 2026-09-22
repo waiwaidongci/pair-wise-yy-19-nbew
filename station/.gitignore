@@ -1,0 +1,7 @@
+# 运行期数据
+data/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
