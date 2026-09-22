@@ -3,60 +3,79 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>岩芯薄片显微照片索引台</title>
+  <title>岩芯薄片显微样本编目与鉴定放行台</title>
   <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
   <main class="shell">
     <header class="mast">
       <div>
-        <p>Petrographic Slide Index</p>
-        <h1>岩芯薄片显微照片索引台</h1>
+        <p>Core Thin-Section Release Desk</p>
+        <h1>岩芯薄片显微样本编目与鉴定放行台</h1>
       </div>
-      <button id="exportBtn" type="button">导出观察清单</button>
+      <div id="overviewChips" class="chips"></div>
     </header>
 
+    <p id="banner" class="banner" hidden></p>
+
     <section class="layout">
-      <form id="sampleForm" class="editor">
-        <h2>样本录入</h2>
-        <label>显微照片<input id="photoInput" type="file" accept="image/*"></label>
-        <label>样本编号<input name="code" required placeholder="BX-17-03"></label>
-        <label>采样地点<input name="location" placeholder="剖面东侧第二层"></label>
-        <div class="pair">
-          <label>放大倍数<input name="magnification" placeholder="40x"></label>
-          <label>偏光类型
-            <select name="polarization">
-              <option>单偏光</option>
-              <option>正交偏光</option>
-              <option>反射光</option>
-            </select>
-          </label>
-        </div>
-        <label>主要矿物<input name="minerals" placeholder="石英、斜长石、黑云母"></label>
-        <label>颗粒结构<input name="texture" placeholder="半自形粒状、碎裂结构"></label>
-        <label>老师批注<textarea name="comment" rows="4" placeholder="记录鉴定依据或疑点"></textarea></label>
-        <button type="submit">保存样本</button>
-      </form>
+      <div class="col-forms">
+        <form id="catalogForm" class="panel">
+          <h2>编目录入</h2>
+          <label>收纳箱号<input name="boxNo" placeholder="BX-01"></label>
+          <label>样本编号<input name="sampleNo" placeholder="YP-2026-001"></label>
+          <div class="pair">
+            <label>深度（m）<input name="depth" placeholder="125.4"></label>
+            <label>日期<input name="date" type="date"></label>
+          </div>
+          <p class="hint">编号、深度或日期空白即停补录；每个收纳箱最多一张在途单据。</p>
+          <button type="submit">落单编目</button>
+        </form>
 
-      <section class="board">
-        <div class="filters">
-          <input id="mineralFilter" placeholder="按矿物筛选">
-          <select id="polarFilter">
-            <option value="">全部偏光</option>
-            <option>单偏光</option>
-            <option>正交偏光</option>
-            <option>反射光</option>
-          </select>
-        </div>
-        <div id="sampleGrid" class="sample-grid"></div>
-      </section>
+        <form id="identForm" class="panel">
+          <h2 id="identFormTitle">鉴定录入</h2>
+          <label>单据<select id="identDoc" name="docId"></select></label>
+          <label>矿物组成<input name="minerals" placeholder="石英、斜长石、黑云母"></label>
+          <label>结构<input name="texture" placeholder="半自形粒状结构"></label>
+          <div class="pair">
+            <label>偏光
+              <select name="polarization">
+                <option value="">缺失</option>
+                <option>单偏光</option>
+                <option>正交偏光</option>
+                <option>锥光</option>
+                <option>反射光</option>
+              </select>
+            </label>
+            <label>孔隙占比（%）<input name="porosity" type="number" min="0" max="100" step="0.1" placeholder="12.5"></label>
+          </div>
+          <label>鉴定者<input name="identifier" placeholder="张工"></label>
+          <p class="hint">孔隙越过 20% 或偏光缺失只进复查；复查者须与首次鉴定者不同。</p>
+          <button id="identSubmit" type="submit">提交鉴定</button>
+        </form>
+      </div>
 
-      <aside class="compare">
-        <h2>并排对比</h2>
-        <div id="comparePane" class="compare-pane"></div>
+      <div class="col-board">
+        <section class="panel">
+          <h2>单据总览</h2>
+          <div id="docList" class="doc-list"></div>
+        </section>
+        <section class="panel">
+          <h2>复查队列</h2>
+          <div id="reviewQueue" class="queue-list"></div>
+        </section>
+      </div>
+
+      <aside class="panel col-history">
+        <h2>履历</h2>
+        <div id="historyPane"></div>
       </aside>
     </section>
   </main>
+
+  <script src="./js/judgment.js"></script>
+  <script src="./js/intake.js"></script>
+  <script src="./js/store.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>

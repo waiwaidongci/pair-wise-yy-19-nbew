@@ -1,141 +1,232 @@
-const storageKey = "wxyy-2-thin-section-index";
-const state = JSON.parse(localStorage.getItem(storageKey) || '{"samples":[],"compare":[]}');
+/* UI 接线层：不含业务规则，只调用 Intake / Judgment / Store 三个单元 */
+const store = Store.browserStore();
+let state = store.load();
+let selectedDocId = null;
 
-const form = document.querySelector("#sampleForm");
-const photoInput = document.querySelector("#photoInput");
-const sampleGrid = document.querySelector("#sampleGrid");
-const comparePane = document.querySelector("#comparePane");
-const mineralFilter = document.querySelector("#mineralFilter");
-const polarFilter = document.querySelector("#polarFilter");
+const banner = document.querySelector("#banner");
+const overviewChips = document.querySelector("#overviewChips");
+const catalogForm = document.querySelector("#catalogForm");
+const identForm = document.querySelector("#identForm");
+const identDocSelect = document.querySelector("#identDoc");
+const identFormTitle = document.querySelector("#identFormTitle");
+const identSubmit = document.querySelector("#identSubmit");
+const docList = document.querySelector("#docList");
+const reviewQueuePane = document.querySelector("#reviewQueue");
+const historyPane = document.querySelector("#historyPane");
 
-let pendingPhoto = "";
+const STATUS_LABEL = { inflight: "在途·待鉴定", pending_review: "待复查", released: "已放行" };
+const VERDICT_LABEL = { released: "放行", pending_review: "只进复查", cancelled: "已取消·历史稿" };
 
-function save() {
-  localStorage.setItem(storageKey, JSON.stringify(state));
+function esc(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[ch]));
 }
 
-function readFileAsDataUrl(file) {
-  return new Promise((resolve) => {
-    if (!file) return resolve("");
-    const reader = new FileReader();
-    reader.addEventListener("load", () => resolve(reader.result));
-    reader.readAsDataURL(file);
-  });
+function now() {
+  return new Date().toISOString();
 }
 
-function filteredSamples() {
-  const mineral = mineralFilter.value.trim();
-  const polarization = polarFilter.value;
-  return state.samples.filter((sample) => {
-    const mineralMatch = !mineral || sample.minerals.includes(mineral);
-    const polarMatch = !polarization || sample.polarization === polarization;
-    return mineralMatch && polarMatch;
-  });
+function showBanner(message, isError) {
+  banner.textContent = message;
+  banner.classList.toggle("error", Boolean(isError));
+  banner.hidden = false;
+}
+
+function persist() {
+  store.save(state);
+}
+
+function applyResult(result, okMessage) {
+  if (!result.ok) {
+    showBanner(result.error, true);
+    return false;
+  }
+  persist();
+  render();
+  showBanner(okMessage, false);
+  return true;
+}
+
+/* ---------- 渲染 ---------- */
+
+function renderOverview() {
+  const { counts } = Store.overview(state);
+  overviewChips.innerHTML = [
+    ["在途·待鉴定", counts.inflight],
+    ["待复查", counts.pending_review],
+    ["已放行", counts.released],
+    ["单据总数", counts.total]
+  ].map(([label, n]) => `<span class="chip">${label} <b>${n}</b></span>`).join("");
+}
+
+function renderDocList() {
+  const { docs } = Store.overview(state);
+  docList.innerHTML = docs.length ? docs.map((doc) => {
+    const history = Store.historyOf(state, doc.id);
+    const current = history.versions.length ? history.versions[history.versions.length - 1] : null;
+    const actions = [
+      doc.status === "inflight" ? `<button type="button" data-identify="${doc.id}">录入鉴定</button>` : "",
+      history.versions.length ? `<button type="button" data-correct="${doc.id}">更正</button>` : "",
+      `<button type="button" class="ghost" data-history="${doc.id}">履历</button>`
+    ].join("");
+    return `
+      <article class="doc-card status-${doc.status}">
+        <header>
+          <strong>${esc(doc.id)}</strong>
+          <span class="badge">${STATUS_LABEL[doc.status] || doc.status}</span>
+        </header>
+        <p>箱号 ${esc(doc.boxNo)} · 样本 ${esc(doc.sampleNo)} · 深度 ${esc(doc.depth)} m · ${esc(doc.date)}</p>
+        ${current ? `<p>现稿 V${current.version}：${esc(current.minerals)}｜${esc(current.texture)}｜偏光 ${esc(current.polarization) || "缺失"}｜孔隙 ${current.porosity}%</p>` : "<p>尚未录入鉴定。</p>"}
+        <div class="card-actions">${actions}</div>
+      </article>`;
+  }).join("") : "<p class=\"empty\">暂无单据，请先在左侧编目落单。</p>";
+}
+
+function renderReviewQueue() {
+  const queue = Store.reviewQueue(state);
+  reviewQueuePane.innerHTML = queue.length ? queue.map((item) => `
+    <article class="queue-item">
+      <p><strong>${esc(item.docId)}</strong> · 箱号 ${esc(item.boxNo)} · 样本 ${esc(item.sampleNo)}</p>
+      <p>首次鉴定者 ${esc(item.identifier)}｜孔隙 ${item.porosity}%｜偏光 ${esc(item.polarization) || "缺失"}</p>
+      <div class="review-row">
+        <input type="text" placeholder="复查者（须不同于首次鉴定者）" data-reviewer-for="${item.docId}">
+        <button type="button" data-approve="${item.docId}">复查放行</button>
+      </div>
+    </article>`).join("") : "<p class=\"empty\">复查队列为空。</p>";
+}
+
+function renderHistory() {
+  if (!selectedDocId) {
+    historyPane.innerHTML = "<p class=\"empty\">在总览中点「履历」查看单据鉴定稿历史。</p>";
+    return;
+  }
+  const history = Store.historyOf(state, selectedDocId);
+  if (!history) {
+    historyPane.innerHTML = "<p class=\"empty\">单据不存在。</p>";
+    return;
+  }
+  const versions = history.versions.length ? history.versions.map((v) => `
+    <li class="version ${v.readonly ? "readonly" : "current"}">
+      <header>
+        <strong>V${v.version}</strong>
+        <span class="badge">${VERDICT_LABEL[v.verdict] || v.verdict}</span>
+        ${v.readonly ? "<span class=\"tag\">只读</span>" : "<span class=\"tag current-tag\">现稿</span>"}
+      </header>
+      <p>矿物组成：${esc(v.minerals)}</p>
+      <p>结构：${esc(v.texture)}</p>
+      <p>偏光：${esc(v.polarization) || "缺失"}｜孔隙占比：${v.porosity}%</p>
+      <p>鉴定者：${esc(v.identifier)}${v.reviewer ? `｜复查者：${esc(v.reviewer)}` : ""}</p>
+      <p class="muted">${esc(v.createdAt)}</p>
+    </li>`).join("") : "<p class=\"empty\">尚无鉴定稿。</p>";
+  historyPane.innerHTML = `
+    <h3>${esc(history.docId)} · 箱号 ${esc(history.boxNo)} · 样本 ${esc(history.sampleNo)}</h3>
+    <p>当前状态：${STATUS_LABEL[history.status] || history.status}</p>
+    <ol class="timeline">${versions}</ol>`;
+}
+
+function renderIdentDocOptions() {
+  const previous = identDocSelect.value;
+  const eligible = state.docs;
+  identDocSelect.innerHTML = eligible.length ? eligible.map((doc) => {
+    const mode = doc.status === "inflight" ? "首次鉴定" : "更正重判";
+    return `<option value="${doc.id}">${doc.id} · ${doc.boxNo} · ${doc.sampleNo}（${mode}）</option>`;
+  }).join("") : "<option value=\"\">暂无单据</option>";
+  if (previous && eligible.some((doc) => doc.id === previous)) {
+    identDocSelect.value = previous;
+  }
+  syncIdentFormMode();
 }
 
 function render() {
-  const rows = filteredSamples();
-  sampleGrid.innerHTML = rows.length ? rows.map((sample) => `
-    <article class="sample-card">
-      ${sample.photo ? `<img src="${sample.photo}" alt="${sample.code}显微照片">` : "<div class=\"photo-placeholder\"></div>"}
-      <div class="sample-body">
-        <h3>${sample.code}</h3>
-        <p>${sample.location || "未记录地点"} · ${sample.magnification || "未记录倍数"} · ${sample.polarization}</p>
-        <p>矿物：${sample.minerals || "未记录"}</p>
-        <p>结构：${sample.texture || "未记录"}</p>
-        <p>${sample.comment || "未填写批注"}</p>
-        <div class="card-actions">
-          <label><input type="checkbox" data-compare="${sample.id}" ${state.compare.includes(sample.id) ? "checked" : ""}>对比</label>
-          <button type="button" data-delete="${sample.id}">删除</button>
-        </div>
-      </div>
-    </article>
-  `).join("") : "<p>还没有样本，先从左侧录入一张薄片照片。</p>";
-
-  const compareSamples = state.compare
-    .map((id) => state.samples.find((sample) => sample.id === id))
-    .filter(Boolean)
-    .slice(0, 2);
-
-  comparePane.innerHTML = compareSamples.length ? compareSamples.map((sample) => `
-    <article class="compare-item">
-      ${sample.photo ? `<img src="${sample.photo}" alt="${sample.code}对比图">` : ""}
-      <h3>${sample.code}</h3>
-      <p>${sample.polarization} · ${sample.minerals || "未记录矿物"}</p>
-      <p>${sample.texture || "未记录结构"}</p>
-    </article>
-  `).join("") : "<p>勾选两张样本卡片后可并排对比。</p>";
+  renderOverview();
+  renderDocList();
+  renderReviewQueue();
+  renderHistory();
+  renderIdentDocOptions();
 }
 
-photoInput.addEventListener("change", async () => {
-  pendingPhoto = await readFileAsDataUrl(photoInput.files[0]);
-});
+/* ---------- 事件 ---------- */
 
-form.addEventListener("submit", async (event) => {
+catalogForm.addEventListener("submit", (event) => {
   event.preventDefault();
-  const data = new FormData(form);
-  if (!pendingPhoto && photoInput.files[0]) {
-    pendingPhoto = await readFileAsDataUrl(photoInput.files[0]);
+  const data = new FormData(catalogForm);
+  const result = Intake.catalog(state, {
+    boxNo: data.get("boxNo"),
+    sampleNo: data.get("sampleNo"),
+    depth: data.get("depth"),
+    date: data.get("date")
+  }, now());
+  if (applyResult(result, `单据 ${result.doc ? result.doc.id : ""} 编目落单成功`)) {
+    catalogForm.reset();
   }
-  state.samples.unshift({
-    id: crypto.randomUUID(),
-    photo: pendingPhoto,
-    code: data.get("code").trim(),
-    location: data.get("location").trim(),
-    magnification: data.get("magnification").trim(),
+});
+
+function fillIdentForm(docId) {
+  identDocSelect.value = docId;
+  const history = Store.historyOf(state, docId);
+  const current = history && history.versions.length ? history.versions[history.versions.length - 1] : null;
+  identForm.elements.minerals.value = current ? current.minerals : "";
+  identForm.elements.texture.value = current ? current.texture : "";
+  identForm.elements.polarization.value = current ? current.polarization : "";
+  identForm.elements.porosity.value = current ? current.porosity : "";
+  identForm.elements.identifier.value = current ? current.identifier : "";
+  syncIdentFormMode();
+}
+
+function syncIdentFormMode() {
+  const doc = Intake.findDoc(state, identDocSelect.value);
+  const isFirst = doc && doc.status === "inflight";
+  identFormTitle.textContent = isFirst ? "鉴定录入（首次鉴定）" : "样本更正（旧放行取消，按现值重判）";
+  identSubmit.textContent = isFirst ? "提交鉴定" : "提交更正";
+}
+
+identDocSelect.addEventListener("change", () => fillIdentForm(identDocSelect.value));
+
+identForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const docId = identDocSelect.value;
+  const doc = Intake.findDoc(state, docId);
+  if (!doc) {
+    showBanner("请先选择单据", true);
+    return;
+  }
+  const data = new FormData(identForm);
+  const fields = {
+    minerals: data.get("minerals"),
+    texture: data.get("texture"),
     polarization: data.get("polarization"),
-    minerals: data.get("minerals").trim(),
-    texture: data.get("texture").trim(),
-    comment: data.get("comment").trim(),
-    createdAt: new Date().toISOString()
-  });
-  pendingPhoto = "";
-  photoInput.value = "";
-  form.reset();
-  save();
-  render();
+    porosity: data.get("porosity"),
+    identifier: data.get("identifier")
+  };
+  const isFirst = doc.status === "inflight";
+  const result = isFirst
+    ? Intake.identify(state, docId, fields, now())
+    : Intake.correct(state, docId, fields, now());
+  const version = result.version;
+  const verdictText = version ? `，判定：${VERDICT_LABEL[version.verdict]}` : "";
+  applyResult(result, `${isFirst ? "鉴定" : "更正"}已写入 ${docId} V${version ? version.version : ""}${verdictText}`);
 });
 
-sampleGrid.addEventListener("click", (event) => {
-  const deleteId = event.target.dataset.delete;
-  if (deleteId) {
-    state.samples = state.samples.filter((sample) => sample.id !== deleteId);
-    state.compare = state.compare.filter((id) => id !== deleteId);
-    save();
-    render();
+docList.addEventListener("click", (event) => {
+  const target = event.target.closest("button");
+  if (!target) return;
+  const { identify, correct, history } = target.dataset;
+  if (identify) fillIdentForm(identify);
+  if (correct) fillIdentForm(correct);
+  if (history) {
+    selectedDocId = history;
+    renderHistory();
   }
 });
 
-sampleGrid.addEventListener("change", (event) => {
-  const id = event.target.dataset.compare;
-  if (!id) return;
-  if (event.target.checked) {
-    state.compare = [id, ...state.compare.filter((item) => item !== id)].slice(0, 2);
-  } else {
-    state.compare = state.compare.filter((item) => item !== id);
-  }
-  save();
-  render();
-});
-
-[mineralFilter, polarFilter].forEach((field) => field.addEventListener("input", render));
-
-document.querySelector("#exportBtn").addEventListener("click", () => {
-  const checklist = state.samples.map((sample) => ({
-    样本编号: sample.code,
-    采样地点: sample.location,
-    放大倍数: sample.magnification,
-    偏光类型: sample.polarization,
-    主要矿物: sample.minerals,
-    颗粒结构: sample.texture,
-    老师批注: sample.comment
-  }));
-  const blob = new Blob([JSON.stringify(checklist, null, 2)], { type: "application/json" });
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(blob);
-  link.download = "thin-section-checklist.json";
-  link.click();
-  URL.revokeObjectURL(link.href);
+reviewQueuePane.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-approve]");
+  if (!button) return;
+  const docId = button.dataset.approve;
+  const input = reviewQueuePane.querySelector(`input[data-reviewer-for="${docId}"]`);
+  const result = Intake.submitReview(state, docId, input ? input.value : "", now());
+  applyResult(result, `单据 ${docId} 复查通过，已放行`);
 });
 
 render();
